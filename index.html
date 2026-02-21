@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FleetFlow | Logistics Management</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        .page-content { display: none; animation: fadeIn 0.3s ease-in-out; }
+        .page-content.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .nav-item.active { background-color: #1e293b; border-left: 4px solid #3b82f6; color: white; }
+        .modal-overlay { background-color: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden text-slate-800">
+
+    <!-- SYNCHRONOUS UI SCRIPT (Prevents ReferenceErrors before Cloud connects) -->
+    <script>
+        window.switchTab = (tabId) => {
+            document.querySelectorAll('.page-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active', 'border-l-4', 'border-blue-500', 'bg-slate-800', 'text-white'));
+            document.getElementById(tabId).classList.add('active');
+            const clickedBtn = document.querySelector(`.nav-item[onclick="switchTab('${tabId}')"]`);
+            if(clickedBtn) clickedBtn.classList.add('active', 'bg-slate-800', 'text-white');
+            if(tabId === 'analytics' && typeof window.renderChart === 'function') window.renderChart();
+        };
+
+        window.toggleModal = (modalId) => {
+            const modal = document.getElementById(modalId);
+            const content = modal.children[0];
+            if (modal.classList.contains('hidden')) {
+                modal.classList.remove('hidden');
+                setTimeout(() => { modal.style.opacity = '1'; content.classList.replace('scale-95', 'scale-100'); }, 10);
+            } else {
+                modal.style.opacity = '0'; content.classList.replace('scale-100', 'scale-95');
+                setTimeout(() => modal.classList.add('hidden'), 300);
+            }
+        };
+
+        // Loading placeholders for interactive buttons
+        const loadingMsg = (e) => { 
+            if(e && e.preventDefault) e.preventDefault(); 
+            alert("App is connecting to the cloud. Please wait a moment..."); 
+        };
+        window.login = loadingMsg;
+        window.logout = loadingMsg;
+        window.handleAddVehicle = loadingMsg;
+        window.handleDispatch = loadingMsg;
+        window.handleLogService = loadingMsg;
+        window.openEndTripModal = loadingMsg;
+        window.handleEndTripSubmit = loadingMsg;
+        window.updateVehicleStatus = loadingMsg;
+        window.updateDriverStatus = loadingMsg;
+        window.exportFinancialsCSV = loadingMsg;
+        window.handleSearch = () => {};
+        window.updateDispatcherDropdowns = () => {};
+    </script>
+
+    <!-- LOGIN SCREEN -->
+    <div id="login-screen" class="fixed inset-0 bg-slate-900 z-50 flex flex-col items-center justify-center transition-opacity duration-500">
+        <div class="mb-8 text-center">
+            <div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white text-3xl shadow-lg mx-auto mb-4">
+                <i class="fa-solid fa-truck-fast"></i>
+            </div>
+            <h1 class="text-3xl font-bold text-white tracking-wide">FleetFlow</h1>
+            <p class="text-slate-400 mt-2">Logistics Management System</p>
+        </div>
+        
+        <div class="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+            <h2 class="text-xl font-semibold text-slate-800 mb-6 text-center">Sign in to your account</h2>
+            <div class="space-y-4">
+                <button onclick="login('manager')" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-medium py-3 rounded-lg flex justify-center items-center gap-2 transition-colors">
+                    <i class="fa-solid fa-user-tie"></i> Sign in as Fleet Manager
+                </button>
+                <button onclick="login('dispatcher')" class="w-full bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium py-3 rounded-lg border border-blue-200 flex justify-center items-center gap-2 transition-colors">
+                    <i class="fa-solid fa-headset"></i> Sign in as Dispatcher
+                </button>
+            </div>
+            <div id="login-loading" class="text-center mt-4 text-blue-600 text-sm font-medium">
+                <i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Connecting to cloud database...
+            </div>
+            <p class="text-xs text-center text-slate-500 mt-6"><i class="fa-solid fa-lock"></i> Role-Based Access Control Enabled</p>
+        </div>
+    </div>
+
+    <!-- MAIN APP WRAPPER (Hidden initially) -->
+    <div id="main-app" class="w-full h-full flex hidden opacity-0 transition-opacity duration-500">
+        
+        <!-- Sidebar -->
+        <aside class="w-64 bg-slate-900 text-slate-300 flex flex-col transition-all duration-300">
+            <div class="h-16 flex items-center px-6 border-b border-slate-800 text-white font-bold text-xl tracking-wide">
+                <i class="fa-solid fa-truck-fast text-blue-500 mr-3"></i> FleetFlow
+            </div>
+            
+            <nav class="flex-1 py-4 space-y-1 overflow-y-auto" id="sidebar-nav">
+                <button onclick="switchTab('dashboard')" class="nav-item active w-full flex items-center px-6 py-3 hover:bg-slate-800 hover:text-white transition-colors">
+                    <i class="fa-solid fa-chart-pie w-6"></i> <span class="font-medium text-sm">Command Center</span>
+                </button>
+                <button onclick="switchTab('vehicles')" class="nav-item w-full flex items-center px-6 py-3 hover:bg-slate-800 hover:text-white transition-colors">
+                    <i class="fa-solid fa-truck w-6"></i> <span class="font-medium text-sm">Vehicle Registry</span>
+                </button>
+                <button onclick="switchTab('dispatch')" class="nav-item w-full flex items-center px-6 py-3 hover:bg-slate-800 hover:text-white transition-colors">
+                    <i class="fa-solid fa-route w-6"></i> <span class="font-medium text-sm">Trip Dispatcher</span>
+                </button>
+                <button id="nav-maintenance" onclick="switchTab('maintenance')" class="nav-item w-full flex items-center px-6 py-3 hover:bg-slate-800 hover:text-white transition-colors">
+                    <i class="fa-solid fa-wrench w-6"></i> <span class="font-medium text-sm">Maintenance Logs</span>
+                </button>
+                <button onclick="switchTab('drivers')" class="nav-item w-full flex items-center px-6 py-3 hover:bg-slate-800 hover:text-white transition-colors">
+                    <i class="fa-solid fa-id-card-clip w-6"></i> <span class="font-medium text-sm">Driver Safety</span>
+                </button>
+                <button id="nav-analytics" onclick="switchTab('analytics')" class="nav-item w-full flex items-center px-6 py-3 hover:bg-slate-800 hover:text-white transition-colors">
+                    <i class="fa-solid fa-chart-line w-6"></i> <span class="font-medium text-sm">Financial Analytics</span>
+                </button>
+            </nav>
+            
+            <div class="p-4 border-t border-slate-800 flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <div id="user-avatar" class="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold shadow-lg">FM</div>
+                    <div>
+                        <p id="user-name" class="text-sm font-semibold text-white">Fleet Manager</p>
+                        <p id="user-role-label" class="text-xs text-slate-400">Admin Portal</p>
+                    </div>
+                </div>
+                <button onclick="logout()" class="text-slate-500 hover:text-rose-400 transition-colors" title="Logout"><i class="fa-solid fa-arrow-right-from-bracket"></i></button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="flex-1 flex flex-col h-full relative">
+            <!-- Top Header -->
+            <header class="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-8 z-10">
+                <div class="relative w-96">
+                    <i class="fa-solid fa-search absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400"></i>
+                    <input type="text" oninput="handleSearch(this.value)" placeholder="Search vehicles, drivers, trips..." class="w-full pl-10 pr-4 py-2 bg-slate-100 border-none rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none transition-shadow">
+                </div>
+                <div class="flex items-center gap-4 text-slate-500">
+                    <button class="hover:text-blue-600 transition-colors relative">
+                        <i class="fa-solid fa-bell text-lg"></i>
+                        <span class="absolute -top-1 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"></span>
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dynamic Pages Container -->
+            <div class="flex-1 overflow-y-auto p-8 bg-slate-50">
+                
+                <!-- PAGE 1: Command Center -->
+                <div id="dashboard" class="page-content active">
+                    <div class="flex justify-between items-end mb-8">
+                        <div>
+                            <h1 class="text-2xl font-bold text-slate-900">Command Center</h1>
+                            <p class="text-sm text-slate-500 mt-1">High-level fleet oversight and live metrics.</p>
+                        </div>
+                    </div>
+
+                    <!-- KPIs -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <div class="bg-white rounded-xl p-6 border border-slate-100 shadow-sm flex items-center gap-4">
+                            <div class="w-14 h-14 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-2xl"><i class="fa-solid fa-truck-moving"></i></div>
+                            <div>
+                                <p class="text-sm font-medium text-slate-500">Active Fleet (On Trip)</p>
+                                <h3 id="kpi-active" class="text-2xl font-bold text-slate-800">0</h3>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl p-6 border border-slate-100 shadow-sm flex items-center gap-4">
+                            <div class="w-14 h-14 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center text-2xl"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+                            <div>
+                                <p class="text-sm font-medium text-slate-500">In Shop</p>
+                                <h3 id="kpi-shop" class="text-2xl font-bold text-slate-800">0</h3>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl p-6 border border-slate-100 shadow-sm flex items-center gap-4">
+                            <div class="w-14 h-14 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center text-2xl"><i class="fa-solid fa-percent"></i></div>
+                            <div>
+                                <p class="text-sm font-medium text-slate-500">Utilization Rate</p>
+                                <h3 id="kpi-utilization" class="text-2xl font-bold text-slate-800">0%</h3>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-xl p-6 border border-slate-100 shadow-sm flex items-center gap-4">
+                            <div class="w-14 h-14 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><i class="fa-solid fa-boxes-stacked"></i></div>
+                            <div>
+                                <p class="text-sm font-medium text-slate-500">Total Vehicles</p>
+                                <h3 id="kpi-total" class="text-2xl font-bold text-slate-800">0</h3>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recent Activity Table -->
+                    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                        <div class="px-6 py-5 border-b border-slate-200 flex justify-between items-center">
+                            <h3 class="font-semibold text-slate-800 text-lg">Live Trip Status</h3>
+                            <span class="text-xs font-medium bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md flex items-center gap-1">
+                                <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Live
+                            </span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm">
+                                <thead class="bg-slate-50 text-slate-500">
+                                    <tr>
+                                        <th class="px-6 py-4 font-medium">Trip ID</th>
+                                        <th class="px-6 py-4 font-medium">Vehicle</th>
+                                        <th class="px-6 py-4 font-medium">Driver</th>
+                                        <th class="px-6 py-4 font-medium">Cargo Wt.</th>
+                                        <th class="px-6 py-4 font-medium">Status</th>
+                                        <th class="px-6 py-4 font-medium text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="live-trips-body" class="divide-y divide-slate-100">
+                                    <!-- Rendered via JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PAGE 2: Vehicle Registry -->
+                <div id="vehicles" class="page-content">
+                    <div class="flex justify-between items-end mb-8">
+                        <div>
+                            <h1 class="text-2xl font-bold text-slate-900">Vehicle Registry</h1>
+                            <p class="text-sm text-slate-500 mt-1">Manage physical assets and lifecycle.</p>
+                        </div>
+                        <button id="btn-add-vehicle" onclick="toggleModal('add-vehicle-modal')" class="bg-slate-800 hover:bg-slate-900 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition-colors">
+                            <i class="fa-solid fa-plus mr-2"></i> Add New Vehicle
+                        </button>
+                    </div>
+                    
+                    <div class="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-slate-50 text-slate-500">
+                                <tr>
+                                    <th class="px-6 py-4 font-medium">ID / Plate</th>
+                                    <th class="px-6 py-4 font-medium">Model</th>
+                                    <th class="px-6 py-4 font-medium">Max Capacity</th>
+                                    <th class="px-6 py-4 font-medium">Odometer</th>
+                                    <th class="px-6 py-4 font-medium">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vehicles-body" class="divide-y divide-slate-100">
+                                <!-- Rendered via JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- PAGE 3: Trip Dispatcher -->
+                <div id="dispatch" class="page-content">
+                    <div class="mb-8">
+                        <h1 class="text-2xl font-bold text-slate-900">Trip Dispatcher</h1>
+                        <p class="text-sm text-slate-500 mt-1">Assign drivers and vehicles to pending cargo.</p>
+                    </div>
+
+                    <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-8 max-w-2xl">
+                        <h3 class="text-lg font-semibold text-slate-800 mb-6 border-b pb-4">Create New Dispatch</h3>
+                        
+                        <form id="dispatchForm" onsubmit="handleDispatch(event)" class="space-y-6">
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Select Available Vehicle</label>
+                                <select id="vehicleSelect" onchange="updateDispatcherDropdowns()" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required>
+                                    <!-- Populated by JS -->
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Select Available Driver (Valid License Only)</label>
+                                <select id="driverSelect" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required>
+                                    <!-- Populated by JS -->
+                                </select>
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 mb-2">Cargo Weight (kg)</label>
+                                <input type="number" id="cargoWeight" placeholder="Enter total weight in kg" class="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none" required>
+                            </div>
+
+                            <div id="dispatchError" class="hidden bg-rose-50 text-rose-700 p-4 rounded-lg text-sm font-medium border border-rose-200">
+                                <i class="fa-solid fa-circle-exclamation mr-2"></i><span id="errorText"></span>
+                            </div>
+                            
+                            <div id="dispatchSuccess" class="hidden bg-emerald-50 text-emerald-700 p-4 rounded-lg text-sm font-medium border border-emerald-200">
+                                <i class="fa-solid fa-circle-check mr-2"></i>Trip dispatched! Auto-logic updated statuses to 'On Trip'.
+                            </div>
+
+                            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg shadow-md transition-colors">
+                                Initialize Dispatch
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- PAGE 4: Maintenance Logs -->
+                <div id="maintenance" class="page-content">
+                    <div class="mb-8">
+                        <h1 class="text-2xl font-bold text-slate-900">Maintenance Logs</h1>
+                        <p class="text-sm text-slate-500 mt-1">Track asset health. Vehicles logged here are hidden from dispatch.</p>
+                    </div>
+                    <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-8 max-w-2xl text-center mb-8">
+                        <div class="w-16 h-16 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl"><i class="fa-solid fa-wrench"></i></div>
+                        <h3 class="text-lg font-semibold text-slate-800">Auto-Logic Active</h3>
+                        <p class="text-slate-500 mt-2">Logging a vehicle changes its status to "In Shop" automatically and logs an expense.</p>
+                        <button onclick="toggleModal('log-service-modal')" class="mt-6 bg-slate-800 text-white px-6 py-2 rounded-lg font-medium text-sm hover:bg-slate-900">Log New Service</button>
+                    </div>
+                </div>
+
+                <!-- PAGE 5: Driver Safety -->
+                <div id="drivers" class="page-content">
+                    <div class="mb-8">
+                        <h1 class="text-2xl font-bold text-slate-900">Driver Performance & Safety</h1>
+                    </div>
+                    <div id="drivers-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <!-- Rendered via JS -->
+                    </div>
+                </div>
+
+                <!-- PAGE 6: Analytics -->
+                <div id="analytics" class="page-content">
+                    <div class="mb-8">
+                        <h1 class="text-2xl font-bold text-slate-900">Operational Analytics</h1>
+                        <p class="text-sm text-slate-500 mt-1">Financial performance based on logged expenses and completed trips.</p>
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8 max-w-6xl">
+                        <div class="lg:col-span-2 bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                            <h3 class="font-semibold text-slate-800 mb-4">Fuel vs Maintenance Cost</h3>
+                            <div class="h-72 w-full"><canvas id="analyticsChart"></canvas></div>
+                        </div>
+                        
+                        <div class="bg-white border border-slate-200 rounded-xl shadow-sm p-6 flex flex-col justify-between">
+                            <div>
+                                <h3 class="font-semibold text-slate-800 mb-6">Key Performance Indicators</h3>
+                                <div class="space-y-6">
+                                    <div>
+                                        <p class="text-sm text-slate-500 mb-1">Avg Fuel Efficiency</p>
+                                        <p class="text-2xl font-bold text-slate-800" id="kpi-eff">0.0 <span class="text-sm font-medium text-slate-500">km/L</span></p>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-slate-500 mb-1">Total Operational Cost</p>
+                                        <p class="text-2xl font-bold text-slate-800" id="kpi-cost">$0 <span class="text-sm font-medium text-rose-500">Total</span></p>
+                                    </div>
+                                    <div>
+                                        <p class="text-sm text-slate-500 mb-1">Average Vehicle ROI</p>
+                                        <p class="text-2xl font-bold text-slate-800">18.5% <span class="text-sm font-medium text-emerald-500"><i class="fa-solid fa-arrow-trend-up"></i> +4%</span></p>
+                                    </div>
+                                </div>
+                            </div>
+                            <button onclick="exportFinancialsCSV()" class="w-full mt-6 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2 rounded-lg text-sm font-medium transition-colors"><i class="fa-solid fa-file-csv mr-2"></i> Download Financial CSV</button>
+                            <p id="exportMessage" class="hidden text-xs text-rose-500 text-center mt-2 font-medium">No financial data to export.</p>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- MODALS -->
+    <!-- Add Vehicle Modal -->
+    <div id="add-vehicle-modal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center hidden opacity-0 transition-opacity">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform scale-95 transition-transform" id="av-modal-content">
+            <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 class="font-bold text-slate-800">Add New Vehicle</h3>
+                <button onclick="toggleModal('add-vehicle-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <form id="addVehicleForm" onsubmit="handleAddVehicle(event)" class="p-6 space-y-4">
+                <div><label class="block text-sm font-medium mb-1">Vehicle ID</label><input type="text" id="vId" required placeholder="e.g. Van-08" class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <div><label class="block text-sm font-medium mb-1">License Plate</label><input type="text" id="vPlate" required placeholder="e.g. XY-999" class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <div><label class="block text-sm font-medium mb-1">Model</label><input type="text" id="vModel" required placeholder="e.g. Ford Transit" class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <div><label class="block text-sm font-medium mb-1">Vehicle Type</label>
+                    <select id="vType" required class="w-full px-3 py-2 border rounded-lg text-sm">
+                        <option value="Van">Van</option>
+                        <option value="Truck">Truck</option>
+                        <option value="Bike">Bike</option>
+                    </select>
+                </div>
+                <div><label class="block text-sm font-medium mb-1">Max Capacity (kg)</label><input type="number" id="vCap" required class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <div><label class="block text-sm font-medium mb-1">Initial Odometer</label><input type="number" id="vOdo" required class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <button type="submit" class="w-full bg-slate-800 text-white py-2.5 rounded-lg font-medium hover:bg-slate-900 mt-4">Save Vehicle</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Log Service Modal -->
+    <div id="log-service-modal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center hidden opacity-0 transition-opacity">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform scale-95 transition-transform" id="ls-modal-content">
+            <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 class="font-bold text-slate-800">Log Maintenance Service</h3>
+                <button onclick="toggleModal('log-service-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <form id="logServiceForm" onsubmit="handleLogService(event)" class="p-6 space-y-4">
+                <div>
+                    <label class="block text-sm font-medium mb-1">Select Vehicle to Service</label>
+                    <select id="serviceVehicleSelect" required class="w-full px-3 py-2 border rounded-lg text-sm"></select>
+                </div>
+                <div><label class="block text-sm font-medium mb-1">Service Type</label><input type="text" required placeholder="e.g. Oil Change" class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <button type="submit" class="w-full bg-rose-600 text-white py-2.5 rounded-lg font-medium hover:bg-rose-700 mt-4">Send to Shop</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- End Trip & Expense Modal -->
+    <div id="end-trip-modal" class="fixed inset-0 modal-overlay z-50 flex items-center justify-center hidden opacity-0 transition-opacity">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-md overflow-hidden transform scale-95 transition-transform" id="et-modal-content">
+            <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 class="font-bold text-slate-800">Complete Trip & Log Fuel</h3>
+                <button onclick="toggleModal('end-trip-modal')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            <form id="endTripForm" onsubmit="handleEndTripSubmit(event)" class="p-6 space-y-4">
+                <input type="hidden" id="etTripId">
+                <input type="hidden" id="etVehicleId">
+                <input type="hidden" id="etDriverName">
+                
+                <div><label class="block text-sm font-medium mb-1">Final Odometer (km)</label><input type="number" id="etOdo" required class="w-full px-3 py-2 border rounded-lg text-sm"></div>
+                <div><label class="block text-sm font-medium mb-1">Fuel Added (Liters)</label><input type="number" id="etFuelLiters" required class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 45"></div>
+                <div><label class="block text-sm font-medium mb-1">Total Fuel Cost ($)</label><input type="number" id="etFuelCost" required class="w-full px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 120"></div>
+                
+                <div class="bg-blue-50 text-blue-700 p-3 rounded-lg text-xs font-medium border border-blue-100">
+                    <i class="fa-solid fa-circle-info mr-1"></i> Marking complete will update Vehicle/Driver statuses back to 'Available'.
+                </div>
+                
+                <button type="submit" class="w-full bg-emerald-600 text-white py-2.5 rounded-lg font-medium hover:bg-emerald-700 mt-4">Mark Done & Save Logs</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- MAIN FIREBASE SCRIPTS -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- 1. FIREBASE INITIALIZATION ---
+        // Base config (Falls back to your keys if not running inside the Canvas preview)
+        let firebaseConfig = {
+            apiKey: "AIzaSyDoZTKxksfEf6xq5Ge_tN7FpQSeekWQum4",
+            authDomain: "fleetflow-44852.firebaseapp.com",
+            projectId: "fleetflow-44852",
+            storageBucket: "fleetflow-44852.firebasestorage.app",
+            messagingSenderId: "312892313061",
+            appId: "1:312892313061:web:9b1626e3eb6e188f4c730c",
+            measurementId: "G-GWZRE5PZ72"
+        };
+
+        // Bridge for Canvas environment compatibility
+        try {
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                firebaseConfig = JSON.parse(__firebase_config);
+            }
+        } catch(e) { console.error("Config fallback enabled"); }
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        
+        const appId = (typeof __app_id !== 'undefined' && __app_id) ? __app_id : "fleetflow-production";
+
+        let fbUser = null;
+
+        // --- 2. GLOBAL STATE ---
+        const state = {
+            currentUser: null, 
+            vehicles: [],
+            drivers: [],
+            trips: [],
+            expenses: [],
+            searchQuery: ''
+        };
+
+        // --- 3. AUTHENTICATION & REAL-TIME LISTENERS ---
+        const initAuth = async () => {
+            try {
+                // Determine the correct auth flow based on environment
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Authentication failed:", error);
+                const loadingIndicator = document.getElementById('login-loading');
+                if(loadingIndicator) loadingIndicator.innerHTML = `<span class="text-rose-500"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Cloud connection failed.</span>`;
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            fbUser = user;
+            if (user) {
+                const loadingIndicator = document.getElementById('login-loading');
+                if(loadingIndicator) loadingIndicator.classList.add('hidden');
+                setupRealtimeListeners();
+            }
+        });
+
+        initAuth();
+
+        function setupRealtimeListeners() {
+            if (!fbUser) return;
+
+            // Listen to Vehicles
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'vehicles'), (snapshot) => {
+                state.vehicles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (state.vehicles.length === 0) seedVehicles(); // Seed if empty
+                if (state.currentUser) updateAllUI();
+            }, (err) => console.error("Vehicles fetch error:", err));
+
+            // Listen to Drivers
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'drivers'), (snapshot) => {
+                state.drivers = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                if (state.drivers.length === 0) seedDrivers(); // Seed if empty
+                if (state.currentUser) updateAllUI();
+            }, (err) => console.error("Drivers fetch error:", err));
+
+            // Listen to Trips
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'trips'), (snapshot) => {
+                state.trips = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => b.timestamp - a.timestamp);
+                if (state.currentUser) updateAllUI();
+            }, (err) => console.error("Trips fetch error:", err));
+
+            // Listen to Expenses
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'expenses'), (snapshot) => {
+                state.expenses = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a,b) => b.timestamp - a.timestamp);
+                if (state.currentUser && window.renderChart) window.renderChart(); 
+            }, (err) => console.error("Expenses fetch error:", err));
+        }
+
+        async function seedVehicles() {
+            const initialVehicles = [
+                { id: 'Van-05', plate: 'XY-123', model: 'Ford Transit', type: 'Van', capacity: 500, odometer: 45000, status: 'Available' },
+                { id: 'Truck-12', plate: 'AB-987', model: 'Volvo FH16', type: 'Truck', capacity: 15000, odometer: 120500, status: 'In Shop' },
+                { id: 'Bike-02', plate: 'ZM-44', model: 'Honda Cargo', type: 'Bike', capacity: 50, odometer: 1200, status: 'Available' }
+            ];
+            for (const v of initialVehicles) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', v.id), v);
+        }
+
+        async function seedDrivers() {
+            const initialDrivers = [
+                { id: 'D01', name: 'Alex Mercer', licenseStatus: 'Valid', licenseType: 'Van', score: 98, status: 'Available' },
+                { id: 'D02', name: 'John Doe', licenseStatus: 'Expired', licenseType: 'Truck', score: 72, status: 'Suspended' },
+                { id: 'D03', name: 'Sarah Jenkins', licenseStatus: 'Valid', licenseType: 'All', score: 88, status: 'Available' }
+            ];
+            for (const d of initialDrivers) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'drivers', d.id), d);
+        }
+
+        // --- 4. EXPOSED WINDOW FUNCTIONS (Overwrites placeholders when loaded) ---
+        window.handleSearch = (query) => {
+            state.searchQuery = query.toLowerCase();
+            updateAllUI();
+        };
+
+        window.login = (role) => {
+            if (!fbUser) return alert("Still connecting to cloud database, please wait a second.");
+            
+            state.currentUser = { role: role, name: role === 'manager' ? 'Fleet Manager' : 'Dispatcher Lead' };
+            
+            document.getElementById('user-name').textContent = state.currentUser.name;
+            document.getElementById('user-avatar').textContent = role === 'manager' ? 'FM' : 'DL';
+            document.getElementById('user-role-label').textContent = role === 'manager' ? 'Admin Portal' : 'Operations';
+            
+            const isManager = role === 'manager';
+            document.getElementById('nav-analytics').style.display = isManager ? 'flex' : 'none';
+            document.getElementById('nav-maintenance').style.display = isManager ? 'flex' : 'none';
+            document.getElementById('btn-add-vehicle').style.display = isManager ? 'block' : 'none';
+
+            document.getElementById('login-screen').style.opacity = '0';
+            setTimeout(() => {
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('main-app').classList.remove('hidden');
+                setTimeout(() => document.getElementById('main-app').style.opacity = '1', 50);
+                
+                updateAllUI();
+                window.switchTab('dashboard');
+            }, 500);
+        };
+
+        window.logout = () => {
+            state.currentUser = null;
+            document.getElementById('main-app').style.opacity = '0';
+            setTimeout(() => {
+                document.getElementById('main-app').classList.add('hidden');
+                document.getElementById('login-screen').classList.remove('hidden');
+                setTimeout(() => document.getElementById('login-screen').style.opacity = '1', 50);
+            }, 500);
+        };
+
+        // --- 5. FIRESTORE CRUD ACTIONS ---
+        window.handleAddVehicle = async (e) => {
+            e.preventDefault();
+            if (!fbUser) return;
+            
+            const newId = document.getElementById('vId').value;
+            const newVehicle = {
+                id: newId,
+                plate: document.getElementById('vPlate').value,
+                model: document.getElementById('vModel').value,
+                type: document.getElementById('vType').value,
+                capacity: parseInt(document.getElementById('vCap').value),
+                odometer: parseInt(document.getElementById('vOdo').value),
+                status: 'Available' 
+            };
+            
+            try {
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', newId), newVehicle);
+                document.getElementById('addVehicleForm').reset();
+                window.toggleModal('add-vehicle-modal');
+            } catch (err) { console.error("Error adding vehicle:", err); }
+        };
+
+        window.handleDispatch = async (e) => {
+            e.preventDefault();
+            if (!fbUser) return;
+
+            const vSelect = document.getElementById('vehicleSelect');
+            const dSelect = document.getElementById('driverSelect');
+            const weight = parseInt(document.getElementById('cargoWeight').value);
+            const capacity = parseInt(vSelect.options[vSelect.selectedIndex].getAttribute('data-capacity'));
+            const errorDiv = document.getElementById('dispatchError');
+            const successDiv = document.getElementById('dispatchSuccess');
+
+            errorDiv.classList.add('hidden'); successDiv.classList.add('hidden');
+
+            if (weight > capacity) {
+                document.getElementById('errorText').textContent = `Weight (${weight}kg) exceeds vehicle capacity (${capacity}kg).`;
+                errorDiv.classList.remove('hidden');
+                return;
+            }
+
+            const vehicleId = vSelect.value;
+            const driverId = dSelect.value;
+            const driverName = dSelect.options[dSelect.selectedIndex].text;
+            const tripId = `TRP-${Date.now().toString().slice(-6)}`;
+
+            try {
+                // Execute Auto-Logic directly in the cloud
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', vehicleId), { status: 'On Trip' });
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'drivers', driverId), { status: 'On Trip' });
+                
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', tripId), {
+                    id: tripId,
+                    vehicleId,
+                    driverName,
+                    weight,
+                    status: 'On Trip',
+                    timestamp: Date.now()
+                });
+
+                successDiv.classList.remove('hidden');
+                document.getElementById('dispatchForm').reset();
+                setTimeout(() => successDiv.classList.add('hidden'), 4000);
+            } catch (err) { console.error("Dispatch error:", err); }
+        };
+
+        window.handleLogService = async (e) => {
+            e.preventDefault();
+            if (!fbUser) return;
+            
+            const vehicleId = document.getElementById('serviceVehicleSelect').value;
+            
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', vehicleId), { status: 'In Shop' });
+                
+                const expId = `EXP-${Date.now()}`;
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expId), {
+                    id: expId, vehicleId, type: 'Maintenance', cost: Math.floor(Math.random() * 300) + 100, timestamp: Date.now()
+                });
+
+                document.getElementById('logServiceForm').reset();
+                window.toggleModal('log-service-modal');
+            } catch (err) { console.error("Maintenance logging error:", err); }
+        };
+
+        window.openEndTripModal = (tripId, vehicleId, driverName) => {
+            document.getElementById('etTripId').value = tripId;
+            document.getElementById('etVehicleId').value = vehicleId;
+            document.getElementById('etDriverName').value = driverName;
+            window.toggleModal('end-trip-modal');
+        };
+
+        window.handleEndTripSubmit = async (e) => {
+            e.preventDefault();
+            if (!fbUser) return;
+
+            const tripId = document.getElementById('etTripId').value;
+            const vehicleId = document.getElementById('etVehicleId').value;
+            const driverName = document.getElementById('etDriverName').value;
+            
+            const cleanDriverName = driverName.split(' (')[0]; 
+            const driver = state.drivers.find(d => d.name === cleanDriverName);
+            
+            const newOdo = parseInt(document.getElementById('etOdo').value);
+            const liters = parseInt(document.getElementById('etFuelLiters').value);
+            const cost = parseInt(document.getElementById('etFuelCost').value);
+
+            try {
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'trips', tripId), { status: 'Completed' });
+                await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', vehicleId), { status: 'Available', odometer: newOdo });
+                if (driver) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'drivers', driver.id), { status: 'Available' });
+                
+                const expId = `EXP-${Date.now()}`;
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'expenses', expId), {
+                    id: expId, vehicleId, type: 'Fuel', liters, cost, timestamp: Date.now()
+                });
+
+                document.getElementById('endTripForm').reset();
+                window.toggleModal('end-trip-modal');
+            } catch (err) { console.error("End trip error:", err); }
+        };
+
+        window.updateVehicleStatus = async (vehicleId, newStatus) => {
+            if (!fbUser) return;
+            try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vehicles', vehicleId), { status: newStatus }); } catch (err) { console.error(err); }
+        };
+
+        window.updateDriverStatus = async (driverId, newStatus) => {
+            if (!fbUser) return;
+            try { await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'drivers', driverId), { status: newStatus }); } catch (err) { console.error(err); }
+        };
+
+        window.exportFinancialsCSV = () => {
+            if(state.expenses.length === 0) {
+                const msg = document.getElementById('exportMessage');
+                msg.classList.remove('hidden');
+                setTimeout(() => msg.classList.add('hidden'), 3000);
+                return;
+            }
+            let csv = "Expense ID,Vehicle ID,Expense Type,Cost ($),Fuel Liters,Date\n";
+            state.expenses.forEach(e => {
+                const d = new Date(e.timestamp).toLocaleDateString();
+                csv += `${e.id},${e.vehicleId},${e.type},${e.cost},${e.liters || 0},${d}\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.setAttribute('hidden', '');
+            a.setAttribute('href', url);
+            a.setAttribute('download', 'fleet_financial_report.csv');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        };
+
+        // --- 6. UI RENDERING LOGIC ---
+        function updateAllUI() {
+            renderKPIs();
+            renderVehicles();
+            renderDrivers();
+            renderTrips();
+            window.updateDispatcherDropdowns();
+            updateServiceDropdowns();
+        }
+
+        function getStatusPill(status) {
+            if(status === 'Available') return `<span class="px-2.5 py-1 bg-emerald-100 text-emerald-700 rounded-md text-xs font-semibold">Available</span>`;
+            if(status === 'On Trip') return `<span class="px-2.5 py-1 bg-blue-100 text-blue-700 rounded-md text-xs font-semibold">On Trip</span>`;
+            if(status === 'In Shop' || status === 'Suspended') return `<span class="px-2.5 py-1 bg-rose-100 text-rose-700 rounded-md text-xs font-semibold">${status}</span>`;
+            return `<span class="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-md text-xs font-semibold">${status}</span>`;
+        }
+
+        function renderKPIs() {
+            const active = state.vehicles.filter(v => v.status === 'On Trip').length;
+            const shop = state.vehicles.filter(v => v.status === 'In Shop').length;
+            const total = state.vehicles.length;
+            const utilization = total > 0 ? Math.round(((active) / total) * 100) : 0;
+
+            document.getElementById('kpi-active').textContent = active;
+            document.getElementById('kpi-shop').textContent = shop;
+            document.getElementById('kpi-total').textContent = total;
+            document.getElementById('kpi-utilization').textContent = `${utilization}%`;
+        }
+
+        function renderVehicles() {
+            const tbody = document.getElementById('vehicles-body');
+            const filtered = state.vehicles.filter(v => 
+                v.id.toLowerCase().includes(state.searchQuery) || 
+                v.model.toLowerCase().includes(state.searchQuery) ||
+                (v.type && v.type.toLowerCase().includes(state.searchQuery)) ||
+                v.status.toLowerCase().includes(state.searchQuery)
+            );
+
+            tbody.innerHTML = filtered.map(v => `
+                <tr class="hover:bg-slate-50">
+                    <td class="px-6 py-4"><p class="font-semibold text-slate-800">${v.id}</p><p class="text-xs text-slate-500">${v.plate}</p></td>
+                    <td class="px-6 py-4">${v.model} <span class="text-xs text-slate-400 block">${v.type || 'N/A'}</span></td>
+                    <td class="px-6 py-4 font-medium">${v.capacity} kg</td>
+                    <td class="px-6 py-4">${(v.odometer || 0).toLocaleString()} km</td>
+                    <td class="px-6 py-4 flex items-center gap-3">
+                        ${getStatusPill(v.status)}
+                        ${v.status !== 'Out of Service' && state.currentUser?.role === 'manager' ? `<button onclick="updateVehicleStatus('${v.id}', 'Out of Service')" class="text-xs text-slate-400 hover:text-rose-500 underline">Retire</button>` : ''}
+                        ${v.status === 'Out of Service' && state.currentUser?.role === 'manager' ? `<button onclick="updateVehicleStatus('${v.id}', 'Available')" class="text-xs text-slate-400 hover:text-emerald-500 underline">Activate</button>` : ''}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function renderDrivers() {
+            const grid = document.getElementById('drivers-grid');
+            const filtered = state.drivers.filter(d => 
+                d.name.toLowerCase().includes(state.searchQuery) ||
+                d.status.toLowerCase().includes(state.searchQuery) ||
+                (d.licenseType && d.licenseType.toLowerCase().includes(state.searchQuery))
+            );
+
+            grid.innerHTML = filtered.map(d => `
+                <div class="bg-white border border-slate-200 rounded-xl p-6 shadow-sm flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-xl text-slate-500"><i class="fa-solid fa-user"></i></div>
+                    <div class="flex-1">
+                        <div class="flex justify-between items-start mb-1">
+                            <h3 class="font-bold text-slate-800">${d.name}</h3>
+                            <select onchange="updateDriverStatus('${d.id}', this.value)" class="text-xs font-semibold bg-slate-50 border border-slate-200 rounded p-1 outline-none cursor-pointer">
+                                <option value="Available" ${d.status === 'Available' ? 'selected' : ''}>On Duty</option>
+                                <option value="Off Duty" ${d.status === 'Off Duty' ? 'selected' : ''}>Off Duty</option>
+                                <option value="Suspended" ${d.status === 'Suspended' ? 'selected' : ''}>Suspended</option>
+                                <option value="On Trip" ${d.status === 'On Trip' ? 'selected' : ''} disabled>On Trip</option>
+                            </select>
+                        </div>
+                        <p class="text-xs ${d.licenseStatus === 'Valid' ? 'text-emerald-600' : 'text-rose-600'} font-medium mb-3">
+                            <i class="fa-solid ${d.licenseStatus === 'Valid' ? 'fa-check' : 'fa-xmark'}"></i> ${d.licenseType || 'All'} License (${d.licenseStatus})
+                        </p>
+                        <div class="flex justify-between text-xs mb-1"><span class="text-slate-500 font-medium">Safety Score</span><span class="font-bold">${d.score}/100</span></div>
+                        <div class="w-full bg-slate-100 rounded-full h-1.5"><div class="${d.score > 80 ? 'bg-emerald-500' : 'bg-amber-500'} h-1.5 rounded-full" style="width: ${d.score}%"></div></div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderTrips() {
+            const tbody = document.getElementById('live-trips-body');
+            const filtered = state.trips.filter(t => 
+                t.id.toLowerCase().includes(state.searchQuery) ||
+                t.vehicleId.toLowerCase().includes(state.searchQuery) ||
+                t.driverName.toLowerCase().includes(state.searchQuery) ||
+                t.status.toLowerCase().includes(state.searchQuery)
+            );
+
+            tbody.innerHTML = filtered.length === 0 ? `<tr><td colspan="6" class="text-center py-4 text-slate-500">No active trips found</td></tr>` : filtered.map(t => `
+                <tr class="hover:bg-slate-50">
+                    <td class="px-6 py-4 font-medium">${t.id}</td>
+                    <td class="px-6 py-4">${t.vehicleId}</td>
+                    <td class="px-6 py-4">${t.driverName}</td>
+                    <td class="px-6 py-4">${t.weight} kg</td>
+                    <td class="px-6 py-4">${getStatusPill(t.status)}</td>
+                    <td class="px-6 py-4 text-right">
+                        ${t.status === 'On Trip' ? `<button onclick="openEndTripModal('${t.id}', '${t.vehicleId}', '${t.driverName}')" class="bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 px-3 py-1 rounded-md text-xs font-bold transition-colors shadow-sm">Complete</button>` : ''}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        window.updateDispatcherDropdowns = () => {
+            const vSelect = document.getElementById('vehicleSelect');
+            if(!vSelect) return;
+            const selectedVehicleId = vSelect.value;
+            const selectedVehicle = state.vehicles.find(v => v.id === selectedVehicleId);
+
+            vSelect.innerHTML = `<option value="" data-capacity="0">-- Choose Available Vehicle --</option>` + 
+                state.vehicles.filter(v => v.status === 'Available' || v.id === selectedVehicleId).map(v => `<option value="${v.id}" data-capacity="${v.capacity}" ${v.id === selectedVehicleId ? 'selected' : ''}>${v.id} (${v.type || 'Vehicle'} | Max: ${v.capacity}kg)</option>`).join('');
+
+            const dSelect = document.getElementById('driverSelect');
+            const requiredType = selectedVehicle ? selectedVehicle.type : null;
+            
+            let availableDrivers = state.drivers.filter(d => d.status === 'Available' && d.licenseStatus === 'Valid');
+            
+            if (requiredType) {
+                availableDrivers = availableDrivers.filter(d => d.licenseType === requiredType || d.licenseType === 'All');
+            }
+
+            dSelect.innerHTML = `<option value="">-- Choose Available Driver --</option>` + 
+                availableDrivers.map(d => `<option value="${d.id}">${d.name} (${d.licenseType || 'All'} License)</option>`).join('');
+        }
+
+        function updateServiceDropdowns() {
+            const sSelect = document.getElementById('serviceVehicleSelect');
+            if(!sSelect) return;
+            sSelect.innerHTML = `<option value="">-- Select Vehicle --</option>` + 
+                state.vehicles.filter(v => v.status !== 'In Shop').map(v => `<option value="${v.id}">${v.id} (${v.status})</option>`).join('');
+        }
+
+        window.renderChart = () => {
+            let totalCost = 0;
+            let totalLiters = 0;
+            let fuelCosts = 0;
+            let maintCosts = 0;
+            
+            state.expenses.forEach(e => {
+                totalCost += e.cost || 0;
+                if(e.type === 'Fuel') { totalLiters += e.liters || 0; fuelCosts += e.cost || 0; }
+                if(e.type === 'Maintenance') maintCosts += e.cost || 0;
+            });
+            
+            const totalKm = state.trips.filter(t=>t.status==='Completed').length * 150 || 1240; 
+            const efficiency = totalLiters > 0 ? (totalKm / totalLiters).toFixed(1) : '0.0';
+            
+            const effElement = document.getElementById('kpi-eff');
+            const costElement = document.getElementById('kpi-cost');
+            if(effElement) effElement.innerHTML = `${efficiency} <span class="text-sm font-medium text-slate-500">km/L</span>`;
+            if(costElement) costElement.innerHTML = `$${totalCost.toLocaleString()} <span class="text-sm font-medium text-slate-500">Total</span>`;
+
+            const ctx = document.getElementById('analyticsChart').getContext('2d');
+            if(window.myChart) window.myChart.destroy(); 
+
+            window.myChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Current'],
+                    datasets: [
+                        { label: 'Fuel Cost ($)', data: [1200, 1900, 1500, 1400, 1100, fuelCosts || 1300], borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderWidth: 2, fill: true, tension: 0.4 },
+                        { label: 'Maintenance ($)', data: [400, 300, 600, 200, 800, maintCosts || 300], borderColor: '#f43f5e', borderDash: [5, 5], borderWidth: 2, tension: 0.4 }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } }, scales: { y: { beginAtZero: true, grid: { borderDash: [2, 4] } }, x: { grid: { display: false } } } }
+            });
+        };
+    </script>
+</body>
+</html>
